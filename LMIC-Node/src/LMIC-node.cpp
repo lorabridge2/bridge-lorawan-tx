@@ -62,7 +62,7 @@
 ESP32Time rtc(3600);
 uint32_t userUTCTime; 
 
-String serial_uplink_data;
+
 
 const uint16_t payloadBufferLength = 256;    // Adjust to fit max payload length
 
@@ -76,7 +76,8 @@ enum join_state { not_joined, joined};
 
 static volatile join_state join_status = not_joined;
 
-uint32_t heartBeatCounter = 0;
+uint32_t dataWatchdogCounter = 0;
+uint32_t serialWatchdogCounter = 0;
 
 //  █ █ █▀▀ █▀▀ █▀▄   █▀▀ █▀█ █▀▄ █▀▀   █▀▀ █▀█ █▀▄
 //  █ █ ▀▀█ █▀▀ █▀▄   █   █ █ █ █ █▀▀   █▀▀ █ █ █ █
@@ -589,6 +590,7 @@ void onEvent(ev_t ev)
             LMIC_setLinkCheckMode(0);
 
             join_status = joined;
+            tx_status = idle;
 
             // The doWork job has probably run already (while
             // the node was still joining) and have rescheduled itself.
@@ -700,7 +702,7 @@ void user_request_network_time_callback(void *pVoidUserUTCTime, int flagSuccess)
     rtc.setTime(*pUserUTCTime);
 
 
-    Serial.print("lbtimesync:");
+    Serial.print("LBTIME: ");
     Serial.print(rtc.getEpoch());
     Serial.println();
 
@@ -846,7 +848,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
         // message every time processWork() is executed.
 
         // Schedule uplink message if possible
-        if (LMIC.opmode & OP_TXRXPEND)
+        if (LMIC.opmode & OP_TXRXPEND || LMIC.opmode & OP_TXDATA)
         {
             // TxRx is currently pending, do not send.
             #ifdef USE_SERIAL
@@ -855,16 +857,36 @@ void processWork(ostime_t doWorkJobTimeStamp)
             #ifdef USE_DISPLAY
                 printEvent(timestamp, "UL not scheduled", PrintTarget::Display);
             #endif
+
+            return;
         }
         else if (Serial.available())
         {
             // Prepare uplink payload.
             uint8_t fPort = 10;
-            uint8_t payloadLength = 0;
-            serial_uplink_data = Serial.readStringUntil('\n');           
+            uint8_t payloadLength = Serial.available();
+            uint8_t payload_type = 0;
             uint16_t i = 0;
 
-            heartBeatCounter = 0;
+            if(payloadLength == 0) {
+                #ifdef USE_SERIAL
+                    printEvent(timestamp, "processWork function received an empty array from serial port", PrintTarget::Serial);
+                //serial.println(serial_uplink_data);
+                #endif
+                return;
+            }
+
+            memset(payloadBuffer, 0, 256);
+            Serial.readBytes(payloadBuffer, payloadLength);        
+            
+           
+            /*
+            serial.println(payloadLength);
+            serial.println(payloadBuffer[0]);
+            serial.println((char *) payloadBuffer);
+            */
+
+            
             tx_status = busy;
 
             #ifdef USE_SERIAL
@@ -872,34 +894,60 @@ void processWork(ostime_t doWorkJobTimeStamp)
                 //serial.println(serial_uplink_data);
             #endif
 
-            payloadLength = serial_uplink_data.length();
 
-            if(payloadLength > 0) {
-                for(i = 0; i < payloadLength; i++)
-                payloadBuffer[i] = serial_uplink_data[i];
-            }       
-
-            //payloadBuffer[0] = counterValue >> 8;
-            //payloadBuffer[1] = counterValue & 0xFF;
+            payload_type = payloadBuffer[0];
 
             // TODO: Enable sync request with serial port command
 
-            //LMIC_requestNetworkTime(user_request_network_time_callback, &userUTCTime);    
+            switch(payload_type) {
+                case 7: // Data 
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0; 
+                    break;
+                case 1: // Timesync req.
+                    LMIC_requestNetworkTime(user_request_network_time_callback, &userUTCTime);
+                    break;
+                case 2: // System event
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false); 
+                    dataWatchdogCounter = 0;
+                    break;
+                case 3: // User event
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false); 
+                    dataWatchdogCounter = 0;
+                    break;
+                case 4: // lbflow digest
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0; 
+                    break;
+                case 5: // lbdevice join
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0; 
+                    break;
+                case 6: // serial heartbeat                   
+                    break;
+                default:
+                    break;
+            }
 
-            scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+            //    
+
+            serialWatchdogCounter = 0;
         }
-        else if(heartBeatCounter > 60) {
+        else if(dataWatchdogCounter > 120) {
             #ifdef USE_SERIAL
                 printEvent(timestamp, "Serial data not scheduled because queue is empty. Scheduling a heartbeat instead.", PrintTarget::Serial);
             #endif
         // Prepare uplink payload.
             uint8_t fPort = 10;
-            uint8_t payloadLength = 2;
+            uint8_t payloadLength = 3;
                 
             tx_status = busy;
 
-            payloadBuffer[0] = counterValue >> 8;
-            payloadBuffer[1] = counterValue & 0xFF;
+            // TODO: Replace by a critical error message (heartbeat not found..)
+
+            payloadBuffer[0] = 6;
+            payloadBuffer[1] = counterValue >> 8;
+            payloadBuffer[2] = counterValue & 0xFF;
 
             // TODO: Enable sync request with serial port command
 
@@ -907,21 +955,20 @@ void processWork(ostime_t doWorkJobTimeStamp)
 
             scheduleUplink(fPort, payloadBuffer, payloadLength, false);
 
-            heartBeatCounter = 0;
+            dataWatchdogCounter = 0;
         
         }
         // No TxRx pending, nothing in serial queue and no heartbeat was sent: update counter 
         else {
-            heartBeatCounter += doWorkIntervalSeconds;
+            dataWatchdogCounter += doWorkIntervalSeconds;
         }
-        
 
         if(join_status == joined && tx_status == idle) {
             serial.println("tx_token");
         }
 
+        
         /*
-
         if(join_status == joined) {
             serial.println("joined");
         }
@@ -936,6 +983,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
             serial.println("tx busy");
         }
         */
+        
     }
 }    
  
