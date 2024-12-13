@@ -858,7 +858,10 @@ void processWork(ostime_t doWorkJobTimeStamp)
                 printEvent(timestamp, "UL not scheduled", PrintTarget::Display);
             #endif
 
-            return;
+            dataWatchdogCounter += doWorkIntervalSeconds;
+            serialWatchdogCounter += doWorkIntervalSeconds;
+
+            
         }
         else if (Serial.available())
         {
@@ -889,10 +892,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
             
             tx_status = busy;
 
-            #ifdef USE_SERIAL
-                printEvent(timestamp, "Scheduling serial string", PrintTarget::Serial);
-                //serial.println(serial_uplink_data);
-            #endif
+            
 
 
             payload_type = payloadBuffer[0];
@@ -901,29 +901,61 @@ void processWork(ostime_t doWorkJobTimeStamp)
 
             switch(payload_type) {
                 case 7: // Data 
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling serial string", PrintTarget::Serial);                
+                    #endif
                     scheduleUplink(fPort, payloadBuffer, payloadLength, false);
                     dataWatchdogCounter = 0; 
                     break;
                 case 1: // Timesync req.
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling timesync request", PrintTarget::Serial);                
+                    #endif
                     LMIC_requestNetworkTime(user_request_network_time_callback, &userUTCTime);
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0;
                     break;
                 case 2: // System event
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling system event", PrintTarget::Serial);                
+                    #endif
                     scheduleUplink(fPort, payloadBuffer, payloadLength, false); 
                     dataWatchdogCounter = 0;
                     break;
                 case 3: // User event
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling user event", PrintTarget::Serial);                
+                    #endif
                     scheduleUplink(fPort, payloadBuffer, payloadLength, false); 
                     dataWatchdogCounter = 0;
                     break;
                 case 4: // lbflow digest
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling flow digest", PrintTarget::Serial);                
+                    #endif
                     scheduleUplink(fPort, payloadBuffer, payloadLength, false);
                     dataWatchdogCounter = 0; 
                     break;
                 case 5: // lbdevice join
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling device join", PrintTarget::Serial);                
+                    #endif
                     scheduleUplink(fPort, payloadBuffer, payloadLength, false);
                     dataWatchdogCounter = 0; 
                     break;
-                case 6: // serial heartbeat                   
+                case 6: // serial heartbeat
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling heartbeat message", PrintTarget::Serial);                
+                    #endif
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0;
+                    break;                    
+                case 8: // Device name
+                    #ifdef USE_SERIAL
+                        printEvent(timestamp, "Scheduling device name", PrintTarget::Serial);                
+                    #endif
+                    scheduleUplink(fPort, payloadBuffer, payloadLength, false);
+                    dataWatchdogCounter = 0; 
                     break;
                 default:
                     break;
@@ -931,59 +963,43 @@ void processWork(ostime_t doWorkJobTimeStamp)
 
             //    
 
-            serialWatchdogCounter = 0;
+         
         }
-        else if(dataWatchdogCounter > 120) {
+        else if(dataWatchdogCounter > 120) { // TODO: Up this value to 5-10 minutes
             #ifdef USE_SERIAL
-                printEvent(timestamp, "Serial data not scheduled because queue is empty. Scheduling a heartbeat instead.", PrintTarget::Serial);
+                printEvent(timestamp, "Serial port inactive as no heartbeat/data received within 2 minutes time window. Sending a serial port failure event...", PrintTarget::Serial);
             #endif
         // Prepare uplink payload.
             uint8_t fPort = 10;
-            uint8_t payloadLength = 3;
+            uint8_t payloadLength = 1;
                 
             tx_status = busy;
+            
+            memset(payloadBuffer, 0, 256);           
 
-            // TODO: Replace by a critical error message (heartbeat not found..)
+            payloadBuffer[0] = 2; // System event
+            sprintf((char *) &payloadBuffer[1], "Bridge serial port failure");
 
-            payloadBuffer[0] = 6;
-            payloadBuffer[1] = counterValue >> 8;
-            payloadBuffer[2] = counterValue & 0xFF;
+            payloadLength = strlen((const char *) payloadBuffer);
 
             // TODO: Enable sync request with serial port command
 
             //LMIC_requestNetworkTime(user_request_network_time_callback, &userUTCTime);    
 
             scheduleUplink(fPort, payloadBuffer, payloadLength, false);
-
+             
             dataWatchdogCounter = 0;
-        
         }
+            
         // No TxRx pending, nothing in serial queue and no heartbeat was sent: update counter 
         else {
-            dataWatchdogCounter += doWorkIntervalSeconds;
+            dataWatchdogCounter += doWorkIntervalSeconds;            
         }
 
         if(join_status == joined && tx_status == idle) {
             serial.println("tx_token");
         }
-
-        
-        /*
-        if(join_status == joined) {
-            serial.println("joined");
-        }
-        else {
-            serial.println("not joined");        
-        }
-
-        if(tx_status == idle) {
-            serial.println("tx idle");
-        }
-        else {
-            serial.println("tx busy");
-        }
-        */
-        
+                       
     }
 }    
  
