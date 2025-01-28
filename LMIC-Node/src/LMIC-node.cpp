@@ -53,7 +53,8 @@
 
 #include "LMIC-node.h"
 #include <ESP32Time.h>
-
+#include "SPIFFS.h"
+#include "FS.h"
 
 //  █ █ █▀▀ █▀▀ █▀▄   █▀▀ █▀█ █▀▄ █▀▀   █▀▄ █▀▀ █▀▀ ▀█▀ █▀█
 //  █ █ ▀▀█ █▀▀ █▀▄   █   █ █ █ █ █▀▀   █▀▄ █▀▀ █ █  █  █ █
@@ -92,9 +93,9 @@ uint32_t doWorkIntervalSeconds = 5;  // Change value in platformio.ini
 
 // Set LoRaWAN keys defined in lorawan-keys.h.
 #ifdef OTAA_ACTIVATION
-    static const u1_t PROGMEM DEVEUI[8]  = { OTAA_DEVEUI };
-    static const u1_t PROGMEM APPEUI[8]  = { OTAA_APPEUI };
-    static const u1_t PROGMEM APPKEY[16] = { OTAA_APPKEY };
+    u1_t PROGMEM DEVEUI[8]  = { OTAA_DEVEUI };
+    u1_t PROGMEM APPEUI[8]  = { OTAA_APPEUI };
+    u1_t PROGMEM APPKEY[16] = { OTAA_APPKEY };
     // Below callbacks are used by LMIC for reading above values.
     void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8); }
     void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8); }
@@ -488,12 +489,105 @@ void printHeader(void)
 #endif //ABP_ACTIVATION
 
 
+unsigned char hexToByte(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    } else if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    } else if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    } else {
+        serial.printf("Key file corrupted\n");
+    }
+}
+
+
+void hexStringToBytes(const char* hexArray, char* byteArray, size_t hexLength) {
+    if (hexLength % 2 != 0) {
+        serial.printf("Key file corrupted");
+        return;
+    }
+
+    size_t byteIndex = 0;
+    for (size_t i = 0; i < hexLength; i += 2) {
+        unsigned char highNibble = hexToByte(hexArray[i]);
+        unsigned char lowNibble = hexToByte(hexArray[i + 1]);
+        byteArray[byteIndex++] = static_cast<char>((highNibble << 4) | lowNibble);
+    }
+}
+
+
+void initSecrets() {
+
+    char _appkey_hex[32];
+    char _appeui_hex[16];
+    char _deveui_hex[16];
+
+    char _appkey_byte[16];
+    char _appeui_byte[8];
+    char _deveui_byte[8];
+
+    char tmp_buf[8];
+
+    if(!SPIFFS.begin(true)){
+        Serial.println("Could not mount SPIFFS");
+        return;        
+    }
+
+    File file = SPIFFS.open("/secrets.txt");
+    if(!file){
+        Serial.println("Failed to open secrets file for reading");
+        return;
+    }
+    
+    Serial.println("Reading secrets");
+    
+    file.readBytes( _appkey_hex,32);
+    file.readBytes(tmp_buf,2); // Skip newline
+    hexStringToBytes(_appkey_hex, _appkey_byte, 32);
+    memcpy_P(APPKEY, _appkey_byte, 16);
+ 
+   
+    file.readBytes( _appeui_hex,16);
+    file.readBytes(tmp_buf,2); // Skip newline
+    hexStringToBytes(_appeui_hex, _appeui_byte, 16);
+    memcpy_P(APPEUI, _appeui_byte, 8);
+
+
+    file.readBytes(_deveui_hex, 16);
+    hexStringToBytes(_deveui_hex, _deveui_byte, 16);
+    memcpy_P(DEVEUI, _deveui_byte, 8);
+
+    /*
+    Serial.println("Appkey bytes");
+
+    for(int idx = 0; idx < 16; idx++) {
+        Serial.printf("%d ", _appkey_byte[idx]);
+    }
+
+    Serial.println("Appeui bytes");
+
+    for(int idx = 0; idx < 8; idx++) {
+        Serial.printf("%d ", _appeui_byte[idx]);
+    }
+
+    Serial.println("Deveui bytes");
+
+    for(int idx = 0; idx < 8; idx++) {
+        Serial.printf("%d ", _deveui_byte[idx]);
+    }
+    */
+    
+    file.close();
+
+}
+
 void initLmic(bit_t adrEnabled = 1,
               dr_t abpDataRate = DefaultABPDataRate, 
               s1_t abpTxPower = DefaultABPTxPower) 
 {
     // ostime_t timestamp = os_getTime();
-
+    
     // Initialize LMIC runtime environment
     os_init();
     // Reset MAC state
@@ -1066,6 +1160,8 @@ void setup()
         #endif
         abort();
     }
+
+    initSecrets();
 
     initLmic();
 
