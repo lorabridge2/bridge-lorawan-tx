@@ -106,7 +106,7 @@ enum class ActivationMode {OTAA, ABP};
         #define WAITFOR_SERIAL_S WAITFOR_SERIAL_SECONDS_DEFAULT
     #endif
 #else
-    #define WAITFOR_SERIAL_S 0
+    #define WAITFOR_SERIAL_S 1
 #endif 
 
 #if defined(ABP_ACTIVATION) && defined(CLASSIC_LMIC)

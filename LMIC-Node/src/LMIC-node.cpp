@@ -845,6 +845,7 @@ lmic_tx_error_t scheduleUplink(uint8_t fPort, uint8_t* data, uint8_t dataLength,
     ostime_t timestamp = os_getTime();
     printEvent(timestamp, "Packet queued");
 
+
     lmic_tx_error_t retval = LMIC_setTxData2(fPort, data, dataLength, confirmed ? 1 : 0);
     timestamp = os_getTime();
 
@@ -909,7 +910,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
     // reading sensor and GPS data and schedule uplink
     // messages if anything needs to be transmitted.
 
-
+   
 
     // Skip processWork if using OTAA and still joining.
     if (LMIC.devaddr != 0)
@@ -942,7 +943,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
         // message every time processWork() is executed.
 
         // Schedule uplink message if possible
-        if (LMIC.opmode & OP_TXRXPEND || LMIC.opmode & OP_TXDATA)
+        if (!LMIC_queryTxReady())
         {
             // TxRx is currently pending, do not send.
             #ifdef USE_SERIAL
@@ -955,7 +956,7 @@ void processWork(ostime_t doWorkJobTimeStamp)
             dataWatchdogCounter += doWorkIntervalSeconds;
             serialWatchdogCounter += doWorkIntervalSeconds;
 
-            
+            return;
         }
         else if (Serial.available())
         {
@@ -1059,9 +1060,9 @@ void processWork(ostime_t doWorkJobTimeStamp)
 
          
         }
-        else if(dataWatchdogCounter > 120) { // TODO: Up this value to 5-10 minutes
+        else if(dataWatchdogCounter > 600) { // TODO: Up this value to 5-10 minutes
             #ifdef USE_SERIAL
-                printEvent(timestamp, "Serial port inactive as no heartbeat/data received within 2 minutes time window. Sending a serial port failure event...", PrintTarget::Serial);
+                printEvent(timestamp, "Serial port inactive as no heartbeat/data received within 10 minutes time window. Sending a serial port failure event...", PrintTarget::Serial);
             #endif
         // Prepare uplink payload.
             uint8_t fPort = 10;
@@ -1087,13 +1088,14 @@ void processWork(ostime_t doWorkJobTimeStamp)
             
         // No TxRx pending, nothing in serial queue and no heartbeat was sent: update counter 
         else {
-            dataWatchdogCounter += doWorkIntervalSeconds;            
+            dataWatchdogCounter += doWorkIntervalSeconds;
         }
-
+        
         if(join_status == joined && tx_status == idle) {
             serial.println("tx_token");
         }
-                       
+        
+       
     }
 }    
  
@@ -1130,7 +1132,8 @@ void processDownlink(ostime_t txCompleteTimestamp, uint8_t fPort, uint8_t* data,
 
 void setup() 
 {
-    // boardInit(InitType::Hardware) must be called at start of setup() before anything else.
+    sleep(5);
+    // boardInit(InitType::Hardware) must be called at strt of setup() before anything else.
     bool hardwareInitSucceeded = boardInit(InitType::Hardware);
 
     #ifdef USE_DISPLAY 
@@ -1138,7 +1141,7 @@ void setup()
     #endif
 
     #ifdef USE_SERIAL
-        initSerial(MONITOR_SPEED, WAITFOR_SERIAL_S);
+        initSerial(MONITOR_SPEED, 600);
     #endif    
 
     boardInit(InitType::PostInitSerial);
